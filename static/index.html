@@ -3,32 +3,353 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>化工装置变更与工艺安全管理</title>
+  <title>化工装置变更与联锁旁路管理</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #1f2937; }
-    main { max-width: 820px; margin: auto; }
-    pre { background: #f3f4f6; padding: 1rem; border-radius: 8px; overflow-x: auto; }
-    button { padding: .5rem .8rem; cursor: pointer; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; margin: 1.5rem; color: #1f2937; background: #f9fafb; }
+    main { max-width: 1100px; margin: auto; }
+    h1 { font-size: 1.4rem; }
+    h2 { font-size: 1.1rem; margin-top: 2rem; border-left: 4px solid #2563eb; padding-left: .5rem; }
+    .bar { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: .8rem 1rem; display: flex; gap: .8rem; align-items: center; flex-wrap: wrap; }
+    .panel { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 1rem; margin-top: .8rem; }
+    label { font-size: .85rem; color: #374151; display: flex; flex-direction: column; gap: .2rem; }
+    input, select, textarea { padding: .4rem .5rem; border: 1px solid #d1d5db; border-radius: 6px; font-size: .9rem; }
+    button { padding: .45rem .8rem; border: 0; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; font-size: .85rem; }
+    button.ghost { background: #6b7280; }
+    button.warn { background: #d97706; }
+    button.danger { background: #dc2626; }
+    button:disabled { background: #cbd5e1; cursor: not-allowed; }
+    table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+    th, td { text-align: left; padding: .45rem .5rem; border-bottom: 1px solid #eef2f7; vertical-align: top; }
+    th { color: #6b7280; font-weight: 600; }
+    .tag { display: inline-block; padding: .1rem .5rem; border-radius: 999px; font-size: .78rem; }
+    .s-pending_review { background: #fef3c7; color: #92400e; }
+    .s-active { background: #dcfce7; color: #166534; }
+    .s-pending_resign { background: #ffedd5; color: #9a3412; }
+    .s-recovered, .s-rejected, .s-cancelled { background: #e5e7eb; color: #374151; }
+    .s-expired, .s-auto_invalidated { background: #fee2e2; color: #991b1b; }
+    .s-draft, .s-implemented { background: #e0e7ff; color: #3730a3; }
+    .s-assessed, .s-approved { background: #dbeafe; color: #1e40af; }
+    .s-commissioned { background: #dcfce7; color: #166534; }
+    .s-rejected, .s-withdrawn, .s-rolled_back, .s-closed { background: #f3f4f6; color: #4b5563; }
+    .blockers { background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; padding: .6rem .8rem; margin-top: .5rem; font-size: .85rem; }
+    .blockers ul { margin: .3rem 0 0; padding-left: 1.2rem; }
+    #log { white-space: pre-wrap; word-break: break-all; max-height: 240px; overflow: auto; font-size: .8rem; background: #0f172a; color: #e2e8f0; border-radius: 8px; padding: .8rem; }
+    .muted { color: #6b7280; font-size: .8rem; }
+    .row-actions button { margin: .1rem .15rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .6rem; }
   </style>
 </head>
 <body>
 <main>
-  <h1>化工装置变更与工艺安全管理</h1>
-  <p>这是最小演示页面。使用浏览器或 curl 调用 JSON API。</p>
-  <p><button onclick="checkHealth()">检查服务状态</button></p>
-  <pre id="result">等待操作</pre>
-  <h2>常用接口</h2>
-  <pre>GET  /health
-GET  /api/&lt;kind&gt;
-POST /api/&lt;kind&gt;
-GET  /api/entities/&lt;id&gt;
-POST /api/entities/&lt;id&gt;/actions</pre>
+  <h1>化工装置变更与联锁旁路管理</h1>
+  <div class="bar">
+    <label>当前用户 <input id="userId" value="admin" size="10"></label>
+    <label>角色
+      <select id="role">
+        <option value="admin">管理员 admin</option>
+        <option value="operator">操作员 operator</option>
+        <option value="safety">安全员 safety</option>
+        <option value="engineer">工程师 engineer</option>
+        <option value="verifier">校验员 verifier</option>
+        <option value="viewer">只读 viewer</option>
+      </select>
+    </label>
+    <button onclick="loadAll()">刷新数据</button>
+    <span class="muted">身份通过 X-User-Id / X-Role 请求头传入；动作权限由规则引擎控制。</span>
+  </div>
+
+  <h2>1. 装置</h2>
+  <div class="panel">
+    <div class="grid">
+      <label>装置名称 <input id="unitName" placeholder="如 Reactor-1"></label>
+      <label>位置 <input id="unitLocation" placeholder="如 Plant-A"></label>
+    </div>
+    <p><button onclick="createUnit()">创建装置</button></p>
+    <table><thead><tr><th>ID</th><th>名称</th><th>位置</th><th>状态</th><th>操作</th></tr></thead>
+      <tbody id="unitsBody"></tbody></table>
+  </div>
+
+  <h2>2. 变更申请</h2>
+  <div class="panel">
+    <div class="grid">
+      <label>装置
+        <select id="changeUnit"></select>
+      </label>
+      <label>变更描述 <input id="changeDesc" placeholder="如 修改联锁停车阈值"></label>
+    </div>
+    <p><button onclick="createChange()">提出变更</button></p>
+    <table><thead><tr><th>ID</th><th>描述</th><th>装置</th><th>状态</th><th>风险</th><th>操作 / 投产阻塞</th></tr></thead>
+      <tbody id="changesBody"></tbody></table>
+  </div>
+
+  <h2>3. 联锁旁路</h2>
+  <div class="panel">
+    <p class="muted">操作员提出旁路，填写装置、联锁位号和恢复期限；经安全员复核风险后生效。生效期间风险升级、装置停机或恢复责任人更换，须重新签认。到期或变更被拒绝/撤回/关闭时自动失效，记录保留。</p>
+    <div class="grid">
+      <label>所属变更 <select id="bypassChange"></select></label>
+      <label>装置（自动取变更装置）<input id="bypassUnit" disabled></label>
+      <label>联锁位号 <input id="bypassTag" placeholder="如 PSHH-101"></label>
+      <label>恢复期限 <input id="bypassDeadline" type="date"></label>
+      <label>恢复责任人 <input id="bypassOwner" placeholder="工号，如 O-1"></label>
+      <label>旁路原因 <input id="bypassReason" placeholder="如 更换传感器"></label>
+    </div>
+    <p><button onclick="createBypass()">提交旁路申请</button></p>
+    <table><thead><tr><th>ID</th><th>位号</th><th>所属变更</th><th>恢复期限</th><th>责任人</th><th>当前状态</th><th>阻塞原因 / 操作</th></tr></thead>
+      <tbody id="bypassesBody"></tbody></table>
+  </div>
+
+  <h2>审计时间线</h2>
+  <div class="panel"><pre id="log">等待操作</pre></div>
 </main>
+
 <script>
-async function checkHealth() {
-  const response = await fetch('/health');
-  document.getElementById('result').textContent = JSON.stringify(await response.json(), null, 2);
+const STATUS_TEXT = {
+  pending_review: '待安全员复核', active: '旁路生效中', pending_resign: '待重新签认',
+  recovered: '已恢复', rejected: '复核被拒绝', cancelled: '已撤回',
+  expired: '到期自动失效', auto_invalidated: '随变更自动失效',
+  operating: '运行中', shutdown: '停机', frozen: '冻结',
+  draft: '草稿', assessed: '已评估', approved: '已批准',
+  implemented: '已实施', commissioned: '已投产',
+  rolled_back: '已回退', closed: '已关闭', withdrawn: '已撤回',
+  open: '待办', completed: '已完成', verified: '已验证'
+};
+const RESIGN_TEXT = {
+  risk_upgraded: '变更风险升级', unit_shutdown: '影响装置停机', owner_changed: '恢复责任人更换'
+};
+let units = [], changes = [], bypasses = [];
+
+function headers() {
+  return {'Content-Type': 'application/json', 'X-User-Id': userId.value || 'anonymous', 'X-Role': role.value};
 }
+async function api(path, options) {
+  const response = await fetch(path, options);
+  const payload = await response.json();
+  if (!response.ok) {
+    log('❌ ' + (options && options.method || 'GET') + ' ' + path + '\n' + JSON.stringify(payload, null, 2));
+    throw new Error(payload.error || ('HTTP ' + response.status));
+  }
+  log('✅ ' + (options && options.method || 'GET') + ' ' + path + '\n' + JSON.stringify(payload, null, 2));
+  return payload;
+}
+function log(text) { document.getElementById('log').textContent = text + '\n\n' + document.getElementById('log').textContent; }
+function esc(value) { return String(value ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function tag(status) { return `<span class="tag s-${esc(status)}">${esc(STATUS_TEXT[status] || status)}</span>`; }
+function shortId(id) { return esc(String(id).slice(0, 8)); }
+
+async function loadAll() {
+  [units, changes, bypasses] = await Promise.all([
+    fetch('/api/units').then(r => r.json()).then(p => p.items),
+    fetch('/api/changes').then(r => r.json()).then(p => p.items),
+    fetch('/api/bypasses').then(r => r.json()).then(p => p.items)
+  ]);
+  renderUnits(); renderChanges(); renderBypasses();
+  const unitSelect = document.getElementById('changeUnit');
+  unitSelect.innerHTML = units.map(u => `<option value="${u.id}">${esc(u.data.name)} (${shortId(u.id)})</option>`).join('');
+  const bypassSelect = document.getElementById('bypassChange');
+  bypassSelect.innerHTML = changes
+    .filter(c => !['rejected', 'withdrawn', 'closed'].includes(c.status))
+    .map(c => `<option value="${c.id}">${esc(c.data.description)} (${shortId(c.id)})</option>`).join('');
+  syncBypassUnit();
+}
+
+function renderUnits() {
+  unitsBody.innerHTML = units.map(u => `<tr>
+    <td>${shortId(u.id)}</td><td>${esc(u.data.name)}</td><td>${esc(u.data.location)}</td>
+    <td>${tag(u.status)}</td>
+    <td class="row-actions">
+      ${u.status === 'operating' ? `<button class="warn" onclick="unitAction('${u.id}','shutdown')">停机</button>` : ''}
+      ${u.status === 'shutdown' ? `<button onclick="unitAction('${u.id}','startup')">开车</button>` : ''}
+    </td></tr>`).join('');
+}
+
+async function createUnit() {
+  await api('/api/units', {method: 'POST', headers: headers(),
+    body: JSON.stringify({name: unitName.value, location: unitLocation.value})});
+  await loadAll();
+}
+async function unitAction(id, action) {
+  const reason = prompt('请输入原因：', action === 'shutdown' ? '计划检修' : '检修完成');
+  if (reason === null) return;
+  await api(`/api/entities/${id}/actions`, {method: 'POST', headers: headers(),
+    body: JSON.stringify({action, data: {reason}})});
+  await loadAll();
+}
+
+function changeButtons(c) {
+  const act = (name, label, cls='') => `<button class="${cls}" onclick="changeAction('${c.id}','${name}')">${label}</button>`;
+  switch (c.status) {
+    case 'draft': return act('assess', '风险评估') + act('withdraw', '撤回', 'ghost');
+    case 'assessed': return act('approve', '批准') + act('reject', '拒绝', 'danger') + act('withdraw', '撤回', 'ghost');
+    case 'approved': return act('implement', '实施') + act('withdraw', '撤回', 'ghost');
+    case 'implemented': return act('commission', '申请投产') + act('rollback', '回退', 'warn');
+    case 'commissioned': return act('rollback', '回退', 'warn');
+    case 'rolled_back': return act('close', '关闭', 'ghost');
+    default: return '';
+  }
+}
+
+async function renderChanges() {
+  const blockerMap = {};
+  await Promise.all(changes.map(async c => {
+    blockerMap[c.id] = await fetch(`/api/changes/${c.id}/blockers`).then(r => r.json());
+  }));
+  changesBody.innerHTML = changes.map(c => {
+    const unit = units.find(u => u.id === c.data.unit_id);
+    const report = blockerMap[c.id];
+    let blockerHtml = '';
+    if (report && report.blocked && (c.status === 'implemented' || report.blockers.length)) {
+      blockerHtml = `<div class="blockers"><strong>投产阻塞项（${report.blockers.length}）：</strong><ul>` +
+        report.blockers.map(b => `<li>${esc(b.reason)}</li>`).join('') + '</ul></div>';
+    }
+    return `<tr>
+      <td>${shortId(c.id)}</td><td>${esc(c.data.description)}</td>
+      <td>${unit ? esc(unit.data.name) : shortId(c.data.unit_id)}</td>
+      <td>${tag(c.status)}</td><td>${esc(c.data.risk_level || '—')}</td>
+      <td class="row-actions">${changeButtons(c)}${blockerHtml}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function changeAction(id, action) {
+  const data = {};
+  if (action === 'assess') {
+    data.risk_level = prompt('风险等级 (low/medium/high/critical)：', 'medium');
+    if (data.risk_level === null) return;
+    data.analyst = prompt('分析员工号：', 'E-1');
+    if (data.analyst === null) return;
+  } else if (action === 'approve') {
+    data.approvals = prompt('批准人工号（逗号分隔，至少满足该风险等级所需数量）：', 'S-1,S-2').split(',').map(s => s.trim()).filter(Boolean);
+    data.permit_id = prompt('作业许可号：', 'MOC-1');
+    if (!data.permit_id) return;
+  } else if (action === 'commission') {
+    data.tests_passed = true;
+  } else if (action === 'close') {
+    data.outcome = prompt('关闭结论：', 'completed');
+    if (!data.outcome) return;
+  } else if (action === 'rollback') {
+    data.reason = prompt('回退原因：', 'unexpected drift');
+    if (!data.reason) return;
+  } else if (action === 'reject' || action === 'withdraw') {
+    data.reason = prompt('原因：', '');
+    if (!data.reason) return;
+  } else if (action === 'implement') {
+    data.procedure_version = prompt('规程版本：', 'v2');
+    if (!data.procedure_version) return;
+  }
+  await api(`/api/entities/${id}/actions`, {method: 'POST', headers: headers(),
+    body: JSON.stringify({action, data})});
+  await loadAll();
+}
+
+function syncBypassUnit() {
+  const c = changes.find(x => x.id === bypassChange.value);
+  const u = c && units.find(x => x.id === c.data.unit_id);
+  bypassUnit.value = u ? u.data.name : '';
+}
+bypassChange.addEventListener('change', syncBypassUnit);
+
+async function createBypass() {
+  const change = changes.find(c => c.id === bypassChange.value);
+  if (!change) return alert('请先创建并选择变更');
+  await api('/api/bypasses', {method: 'POST', headers: headers(), body: JSON.stringify({
+    unit_id: change.data.unit_id, change_id: change.id,
+    interlock_tag: bypassTag.value, restore_deadline: bypassDeadline.value,
+    restore_owner: bypassOwner.value, reason: bypassReason.value
+  })});
+  await loadAll();
+}
+
+function blockerNote(b) {
+  if (b.status === 'active')
+    return `未恢复旁路，阻塞投产；恢复期限 ${esc(b.data.restore_deadline)}`;
+  if (b.status === 'pending_resign')
+    return `需重新签认：${esc(RESIGN_TEXT[b.data.resign_reason] || b.data.resign_reason)}，签认前阻塞投产且不可恢复`;
+  if (b.status === 'expired')
+    return `已超过恢复期限 ${esc(b.data.restore_deadline)} 自动失效但未恢复，仍阻塞投产`;
+  if (b.status === 'auto_invalidated')
+    return '变更被拒绝/撤回/关闭，旁路自动失效但未恢复，仍阻塞投产';
+  if (b.status === 'pending_review') return '等待安全员复核风险';
+  return '';
+}
+
+function bypassButtons(b) {
+  const act = (name, label, cls='', extra='') =>
+    `<button class="${cls}" onclick="bypassAction('${b.id}','${name}'${extra})">${label}</button>`;
+  switch (b.status) {
+    case 'pending_review':
+      return act('approve_bypass', '复核通过') + act('reject_bypass', '拒绝', 'danger')
+        + act('cancel', '撤回申请', 'ghost');
+    case 'active':
+      return act('recover', '恢复联锁')
+        + act('change_owner', '更换责任人', 'warn')
+        + `<button class="warn" onclick="reportEvent('${b.id}')">报告升级事件</button>`;
+    case 'pending_resign':
+      return act('resign', '安全员重新签认', 'warn');
+    case 'expired':
+      return act('recover', '补办恢复');
+    default:
+      return '';
+  }
+}
+
+function renderBypasses() {
+  bypassesBody.innerHTML = bypasses.map(b => {
+    const change = changes.find(c => c.id === b.data.change_id);
+    return `<tr>
+      <td>${shortId(b.id)}</td><td><strong>${esc(b.data.interlock_tag)}</strong></td>
+      <td>${change ? esc(change.data.description) : shortId(b.data.change_id)}</td>
+      <td>${esc(b.data.restore_deadline)}</td>
+      <td>${esc(b.data.restore_owner)}${b.data.approved_by ? '<br><span class="muted">复核：' + esc(b.data.approved_by) + '</span>' : ''}</td>
+      <td>${tag(b.status)}</td>
+      <td class="row-actions">
+        <div class="muted">${blockerNote(b)}</div>
+        ${bypassButtons(b)}
+        ${b.data.resign_history && b.data.resign_history.length ? '<div class="muted">已重新签认 ' + b.data.resign_history.length + ' 次</div>' : ''}
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function bypassAction(id, action) {
+  const data = {};
+  if (action === 'approve_bypass' || action === 'resign') {
+    data.risk_review = prompt('风险复核意见：', action === 'resign' ? '升级后措施已落实' : '补偿监控到位');
+    if (!data.risk_review) return;
+  } else if (action === 'recover') {
+    data.evidence = prompt('恢复证据（联锁功能测试记录）：', 'function-test-ok');
+    if (!data.evidence) return;
+  } else if (action === 'reject_bypass' || action === 'cancel') {
+    data.reason = prompt('原因：', '');
+    if (!data.reason) return;
+  } else if (action === 'change_owner') {
+    data.new_owner = prompt('新恢复责任人工号：', '');
+    if (!data.new_owner) return;
+  }
+  await api(`/api/entities/${id}/actions`, {method: 'POST', headers: headers(),
+    body: JSON.stringify({action, data})});
+  await loadAll();
+}
+
+async function reportEvent(id) {
+  const reason = prompt('升级事件类型：risk_upgraded(风险升级) / unit_shutdown(装置停机) / owner_changed(责任人更换)', 'risk_upgraded');
+  if (!reason) return;
+  const data = {resign_reason: reason};
+  if (reason === 'risk_upgraded') {
+    data.new_risk_level = prompt('新的风险等级 (medium/high/critical)：', 'high');
+    if (!data.new_risk_level) return;
+  } else if (reason === 'unit_shutdown') {
+    data.note = prompt('停机情况说明：', 'unit tripped');
+    if (!data.note) return;
+  } else if (reason === 'owner_changed') {
+    data.new_owner = prompt('新恢复责任人工号：', '');
+    if (!data.new_owner) return;
+  }
+  await api(`/api/entities/${id}/actions`, {method: 'POST', headers: headers(),
+    body: JSON.stringify({action: 'report_event', data})});
+  await loadAll();
+}
+
+loadAll().catch(err => log('初始化失败: ' + err.message));
 </script>
 </body>
 </html>
